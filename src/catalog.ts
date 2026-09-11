@@ -115,7 +115,10 @@ function findTemplate(
 
 function inferThinkingLevelMap(efforts: unknown): Partial<Record<ModelThinkingLevel, string | null>> | undefined {
   if (!Array.isArray(efforts)) return undefined;
-  const available = new Set(efforts.filter((value): value is string => typeof value === "string"));
+  const knownEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  const available = new Set(
+    efforts.filter((value): value is string => typeof value === "string" && knownEfforts.has(value)),
+  );
   if (available.size === 0) return undefined;
 
   const result: Partial<Record<ModelThinkingLevel, string | null>> = Object.fromEntries(
@@ -156,7 +159,15 @@ function toModel(
   const limits = item.capabilities?.limits;
   const efforts = item.capabilities?.supports?.reasoning_effort;
   const inferredThinking = inferThinkingLevelMap(efforts);
-  const reasoning = Array.isArray(efforts) ? efforts.length > 0 : (template?.reasoning ?? false);
+  const reasoningExplicitlyDisabled = Array.isArray(efforts) && efforts.length === 0;
+  const reasoning = reasoningExplicitlyDisabled
+    ? false
+    : inferredThinking
+      ? true
+      : (template?.reasoning ?? false);
+  const thinkingLevelMap = reasoningExplicitlyDisabled
+    ? undefined
+    : (inferredThinking ?? template?.thinkingLevelMap);
   const vision = item.capabilities?.supports?.vision;
 
   return {
@@ -172,7 +183,7 @@ function toModel(
     contextWindow: positiveInteger(limits?.max_context_window_tokens) ?? template?.contextWindow ?? 128_000,
     maxTokens: positiveInteger(limits?.max_output_tokens) ?? template?.maxTokens ?? 16_384,
     headers: template?.headers ?? COPILOT_HEADERS,
-    thinkingLevelMap: template?.thinkingLevelMap ?? inferredThinking,
+    thinkingLevelMap,
     compat: template?.compat ?? fallbackCompat(api),
   } as Model<Api>;
 }

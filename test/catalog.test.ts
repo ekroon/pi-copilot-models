@@ -72,6 +72,100 @@ test("uses server limits and vision capability for known models", () => {
   assert.equal(models[0]?.maxTokens, 64_000);
   assert.deepEqual(models[0]?.input, ["text"]);
   assert.equal(models[0]?.reasoning, true);
+  assert.deepEqual(models[0]?.thinkingLevelMap, {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: null,
+    high: "high",
+  });
+  assert.deepEqual(getSupportedThinkingLevels(models[0]!), ["minimal", "low", "high"]);
+});
+
+test("uses narrower server reasoning capabilities for cloned models", () => {
+  const [parsed] = parseCopilotCatalog(
+    {
+      data: [
+        model("gpt-5.6-sol-fast", {
+          capabilities: { supports: { tool_calls: true, reasoning_effort: ["high"] } },
+        }),
+      ],
+    },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+
+  assert.ok(parsed);
+  assert.deepEqual(parsed.thinkingLevelMap, {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: null,
+    high: "high",
+  });
+  assert.deepEqual(getSupportedThinkingLevels(parsed), ["high"]);
+});
+
+test("uses broader server reasoning capabilities for cloned models", () => {
+  const narrowTemplate: Model<"openai-responses"> = {
+    ...baseModel,
+    thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: "high" },
+  };
+  const [parsed] = parseCopilotCatalog(
+    { data: [model("gpt-5.6-sol-fast")] },
+    [narrowTemplate] as Model<Api>[],
+    "https://example.test",
+  );
+
+  assert.ok(parsed);
+  assert.deepEqual(parsed.thinkingLevelMap, {
+    off: "none",
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  });
+  assert.deepEqual(getSupportedThinkingLevels(parsed), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+});
+
+test("falls back to template reasoning metadata when server metadata is missing or malformed", () => {
+  for (const reasoningEffort of [undefined, "high", [42, "unknown"]]) {
+    const supports: Record<string, unknown> = { tool_calls: true };
+    if (reasoningEffort !== undefined) supports.reasoning_effort = reasoningEffort;
+    const [parsed] = parseCopilotCatalog(
+      {
+        data: [model("gpt-5.6-sol-fast", { capabilities: { supports } })],
+      },
+      [baseModel] as Model<Api>[],
+      "https://example.test",
+    );
+
+    assert.ok(parsed);
+    assert.equal(parsed.reasoning, true);
+    assert.deepEqual(parsed.thinkingLevelMap, baseModel.thinkingLevelMap);
+    assert.deepEqual(getSupportedThinkingLevels(parsed), ["minimal", "low", "medium", "high", "xhigh", "max"]);
+  }
+});
+
+test("an empty server reasoning array disables reasoning and clears inherited levels", () => {
+  const [parsed] = parseCopilotCatalog(
+    {
+      data: [
+        model("gpt-5.6-sol-fast", {
+          capabilities: { supports: { tool_calls: true, reasoning_effort: [] } },
+        }),
+      ],
+    },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+
+  assert.ok(parsed);
+  assert.equal(parsed.reasoning, false);
+  assert.equal(parsed.thinkingLevelMap, undefined);
+  assert.deepEqual(getSupportedThinkingLevels(parsed), ["off"]);
 });
 
 test("filters disabled, hidden, duplicate, and non-tool models", () => {
