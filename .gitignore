@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 ./todos
 /todos/
+./plans/
+/plans/
