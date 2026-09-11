@@ -1,0 +1,38 @@
+{
+  "name": "pi-dynamic-model-selector-copilot",
+  "version": "0.1.0",
+  "description": "Dynamically discovers account-enabled GitHub Copilot models for pi.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "github-copilot",
+    "models"
+  ],
+  "license": "MIT",
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/dynamic-copilot-models.ts"
+    ]
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  }
+}
