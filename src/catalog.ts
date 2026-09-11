@@ -9,15 +9,7 @@ export const COPILOT_HEADERS = {
 
 const COPILOT_API_VERSION = "2026-06-01";
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
-const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
+const STANDARD_THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
 interface CopilotModelLimits {
   max_context_window_tokens?: unknown;
@@ -126,12 +118,18 @@ function inferThinkingLevelMap(efforts: unknown): Partial<Record<ModelThinkingLe
   const available = new Set(efforts.filter((value): value is string => typeof value === "string"));
   if (available.size === 0) return undefined;
 
-  const result: Partial<Record<ModelThinkingLevel, string | null>> = {};
-  for (const level of THINKING_LEVELS) {
-    const providerLevel = level === "off" ? "none" : level;
-    if (available.has(providerLevel)) result[level] = providerLevel;
+  const result: Partial<Record<ModelThinkingLevel, string | null>> = Object.fromEntries(
+    STANDARD_THINKING_LEVELS.map((level) => [level, null]),
+  );
+
+  result.off = available.has("none") ? "none" : null;
+  result.minimal = available.has("minimal") ? "minimal" : available.has("low") ? "low" : null;
+  for (const level of ["low", "medium", "high"] as const) {
+    if (available.has(level)) result[level] = level;
   }
-  if (!available.has("minimal") && available.has("low")) result.minimal = "low";
+  for (const level of ["xhigh", "max"] as const) {
+    if (available.has(level)) result[level] = level;
+  }
   return result;
 }
 

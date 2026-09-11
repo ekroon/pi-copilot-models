@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getCopilotBaseUrl, parseCopilotCatalog } from "../src/catalog.js";
 
 const baseModel: Model<"openai-responses"> = {
@@ -101,8 +101,74 @@ test("infers safe defaults for a completely unknown model", () => {
   assert.equal(models[0]?.api, "openai-responses");
   assert.equal(models[0]?.contextWindow, 128_000);
   assert.equal(models[0]?.maxTokens, 16_384);
-  assert.deepEqual(models[0]?.thinkingLevelMap, { off: "none", high: "high" });
+  assert.deepEqual(models[0]?.thinkingLevelMap, {
+    off: "none",
+    minimal: null,
+    low: null,
+    medium: null,
+    high: "high",
+  });
 });
+
+const thinkingLevelCases: Array<{
+  efforts: string[];
+  supported: ModelThinkingLevel[];
+  map: Partial<Record<ModelThinkingLevel, string | null>>;
+}> = [
+  {
+    efforts: ["none", "high"],
+    supported: ["off", "high"],
+    map: { off: "none", minimal: null, low: null, medium: null, high: "high" },
+  },
+  {
+    efforts: ["high"],
+    supported: ["high"],
+    map: { off: null, minimal: null, low: null, medium: null, high: "high" },
+  },
+  {
+    efforts: ["low", "high"],
+    supported: ["minimal", "low", "high"],
+    map: { off: null, minimal: "low", low: "low", medium: null, high: "high" },
+  },
+  {
+    efforts: ["minimal", "high"],
+    supported: ["minimal", "high"],
+    map: { off: null, minimal: "minimal", low: null, medium: null, high: "high" },
+  },
+  {
+    efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    supported: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    map: {
+      off: "none",
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    },
+  },
+];
+
+for (const { efforts, supported, map } of thinkingLevelCases) {
+  test(`exposes only advertised reasoning efforts: ${efforts.join(", ")}`, () => {
+    const [parsed] = parseCopilotCatalog(
+      {
+        data: [
+          model("completely-unknown-model", {
+            capabilities: { supports: { tool_calls: true, reasoning_effort: efforts } },
+          }),
+        ],
+      },
+      [],
+      "https://example.test",
+    );
+
+    assert.ok(parsed);
+    assert.deepEqual(getSupportedThinkingLevels(parsed), supported);
+    assert.deepEqual(parsed.thinkingLevelMap, map);
+  });
+}
 
 test("rejects malformed responses", () => {
   assert.throws(() => parseCopilotCatalog({}, [], "https://example.test"), /expected data array/);
