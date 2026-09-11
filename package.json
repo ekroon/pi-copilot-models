@@ -1,8 +1,16 @@
 {
-  "name": "pi-dynamic-model-selector-copilot",
+  "name": "pi-copilot-models",
   "version": "0.1.0",
   "description": "Dynamically discovers account-enabled GitHub Copilot models for pi.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ekroon/pi-copilot-models.git"
+  },
+  "homepage": "https://github.com/ekroon/pi-copilot-models#readme",
+  "bugs": {
+    "url": "https://github.com/ekroon/pi-copilot-models/issues"
+  },
   "keywords": [
     "pi-package",
     "pi",
