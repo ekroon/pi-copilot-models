@@ -11,6 +11,8 @@ import {
 
 /** One AI credit is $0.01; Copilot reports costs in billionths of an AI credit. */
 export const NANO_AIU_PER_USD = 100_000_000_000;
+/** Bound ordinary-JSON fallback retention; SSE and NDJSON are parsed incrementally. */
+export const MAX_JSON_FALLBACK_BYTES = 10 * 1024 * 1024;
 
 export interface CopilotTokenDetail {
   batchSize: number;
@@ -111,29 +113,43 @@ function findCopilotUsage(value: unknown, depth = 0): CopilotUsage | undefined {
 export class CopilotUsageParser {
   private readonly decoder = new TextDecoder();
   private readonly onUsage: (usage: CopilotUsage) => void;
+  private readonly maxJsonFallbackBytes: number;
   private buffer = "";
   private completeBody = "";
+  private completeBodyBytes = 0;
+  private fallbackTruncated = false;
   private sseData: string[] = [];
   private sawSse = false;
 
-  constructor(onUsage: (usage: CopilotUsage) => void) {
+  constructor(
+    onUsage: (usage: CopilotUsage) => void,
+    maxJsonFallbackBytes = MAX_JSON_FALLBACK_BYTES,
+  ) {
     this.onUsage = onUsage;
+    this.maxJsonFallbackBytes = maxJsonFallbackBytes;
   }
 
   push(chunk: Uint8Array): void {
     const text = this.decoder.decode(chunk, { stream: true });
-    if (!this.sawSse) this.completeBody += text;
+    if (!this.sawSse && !this.fallbackTruncated) {
+      this.completeBodyBytes += chunk.byteLength;
+      if (this.completeBodyBytes <= this.maxJsonFallbackBytes) this.completeBody += text;
+      else {
+        this.completeBody = "";
+        this.fallbackTruncated = true;
+      }
+    }
     this.buffer += text;
     this.processLines(false);
   }
 
   finish(): void {
     const tail = this.decoder.decode();
-    if (!this.sawSse) this.completeBody += tail;
+    if (!this.sawSse && !this.fallbackTruncated) this.completeBody += tail;
     this.buffer += tail;
     this.processLines(true);
     this.flushSseEvent();
-    if (!this.sawSse) this.inspectJson(this.completeBody.trim());
+    if (!this.sawSse && !this.fallbackTruncated) this.inspectJson(this.completeBody.trim());
     this.completeBody = "";
   }
 
@@ -159,6 +175,7 @@ export class CopilotUsageParser {
     if (line.startsWith("data:")) {
       this.sawSse = true;
       this.completeBody = "";
+      this.completeBodyBytes = 0;
       this.sseData.push(line.slice(5).replace(/^ /, ""));
       return;
     }

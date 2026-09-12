@@ -12,6 +12,8 @@ import {
   type StreamOptions,
 } from "@earendil-works/pi-ai";
 import {
+  CopilotUsageParser,
+  MAX_JSON_FALLBACK_BYTES,
   NANO_AIU_PER_USD,
   parseCopilotUsage,
   tokenDetailCosts,
@@ -153,6 +155,25 @@ test("observes a non-streaming JSON response", async () => {
     fetch: async () => new Response(body, { headers: { "content-type": "application/json" } }),
   }).result();
   assert.equal(result.usage.cost.total, 0.5725);
+});
+
+test("caps whole-body JSON fallback while continuing incremental NDJSON parsing", () => {
+  assert.equal(MAX_JSON_FALLBACK_BYTES, 10 * 1024 * 1024);
+  const encoder = new TextEncoder();
+  const captures: Array<NonNullable<ReturnType<typeof parseCopilotUsage>>> = [];
+  const parser = new CopilotUsageParser((usage) => { captures.push(usage); }, 32);
+  parser.push(encoder.encode(JSON.stringify({
+    padding: "x".repeat(64),
+    copilot_usage: { total_nano_aiu: 1_000_000_000 },
+  }, null, 2)));
+  parser.finish();
+  assert.equal(captures.length, 0, "oversized pretty JSON is left to catalog-cost fallback");
+
+  const incremental = new CopilotUsageParser((usage) => { captures.push(usage); }, 32);
+  incremental.push(encoder.encode(`${JSON.stringify({ padding: "x".repeat(64) })}\n`));
+  incremental.push(encoder.encode(`${JSON.stringify({ copilot_usage: { total_nano_aiu: 2_000_000_000 } })}\n`));
+  incremental.finish();
+  assert.equal(captures.at(-1)?.totalNanoAiu, 2_000_000_000);
 });
 
 test("accepts the Copilot CLI camel-cased usage shape", () => {
