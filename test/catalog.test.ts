@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { getCopilotBaseUrl, parseCopilotCatalog } from "../src/catalog.js";
+import { buildCopilotCatalog, formatTokens, getCopilotBaseUrl, parseCopilotCatalog } from "../src/catalog.js";
 
 const baseModel: Model<"openai-responses"> = {
   id: "gpt-5.6-sol",
@@ -17,6 +17,29 @@ const baseModel: Model<"openai-responses"> = {
   thinkingLevelMap: { off: null, minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
   compat: { supportsOpenAIGrammarTools: true },
 };
+
+function tieredBilling(overrides: Record<string, unknown> = {}) {
+  return {
+    token_prices: {
+      batch_size: 1_000_000,
+      default: {
+        context_max: 272_000,
+        input_price: 200,
+        output_price: 1_000,
+        cache_price: 20,
+        cache_write_price: 250,
+      },
+      long_context: {
+        context_max: 922_000,
+        input_price: 400,
+        output_price: 1_500,
+        cache_price: 40,
+        cache_write_price: 500,
+      },
+      ...overrides,
+    },
+  };
+}
 
 function model(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -50,6 +73,27 @@ test("discovers a new fast variant by cloning its nearest built-in model", () =>
   assert.deepEqual(models[0]?.compat, baseModel.compat);
   assert.deepEqual(models[0]?.cost, baseModel.cost);
   assert.equal(models[0]?.contextWindow, 1_050_000);
+});
+
+test("uses the resolved account inference URL for known, cloned, and unknown models", () => {
+  const proxyBaseUrl = getCopilotBaseUrl(
+    { access: "tid=enterprise;proxy-ep=proxy.enterprise.githubcopilot.com;exp=123" },
+    "https://api.individual.githubcopilot.com",
+  );
+  const catalog = buildCopilotCatalog(
+    {
+      data: [
+        model("gpt-5.6-sol"),
+        model("gpt-5.6-sol-fast"),
+        model("entirely-new-family"),
+      ],
+    },
+    [baseModel] as Model<Api>[],
+    proxyBaseUrl,
+  );
+
+  assert.equal(proxyBaseUrl, "https://api.enterprise.githubcopilot.com");
+  assert.deepEqual(new Set(catalog.models.map((entry) => entry.baseUrl)), new Set([proxyBaseUrl]));
 });
 
 test("uses server limits and vision capability for known models", () => {
@@ -281,4 +325,337 @@ test("derives individual, enterprise, and fallback endpoints", () => {
     "https://copilot-api.github.example.com",
   );
   assert.equal(getCopilotBaseUrl({}, "https://fallback.test"), "https://fallback.test");
+});
+
+test("generates default and long-context variants with explicit routes", () => {
+  const catalog = buildCopilotCatalog(
+    { data: [model("gpt-5.6-sol", { billing: tieredBilling() })] },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+
+  assert.deepEqual(catalog.models.map(({ id, name, contextWindow }) => ({ id, name, contextWindow })), [
+    { id: "gpt-5.6-sol", name: "gpt-5.6-sol · 400k", contextWindow: 400_000 },
+    { id: "gpt-5.6-sol-1.1M", name: "gpt-5.6-sol · 1.1M", contextWindow: 1_050_000 },
+  ]);
+  assert.deepEqual(catalog.routes, new Map([
+    ["gpt-5.6-sol", { canonicalModelId: "gpt-5.6-sol", contextTier: "default" }],
+    ["gpt-5.6-sol-1.1M", { canonicalModelId: "gpt-5.6-sol", contextTier: "long_context" }],
+  ]));
+  assert.deepEqual(catalog.models[0]?.cost, baseModel.cost);
+  assert.deepEqual(catalog.models[1]?.cost, { input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 });
+  assert.notStrictEqual(catalog.models[0]?.cost, catalog.models[1]?.cost);
+});
+
+test("publishes a default-only tier and calculates prompt plus output", () => {
+  const billing = tieredBilling({ long_context: undefined });
+  const catalog = buildCopilotCatalog(
+    { data: [model("gpt-5.6-sol", { billing })] },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.equal(catalog.models.length, 1);
+  assert.equal(catalog.models[0]?.contextWindow, 400_000);
+  assert.equal(catalog.models[0]?.name, "gpt-5.6-sol · 400k");
+});
+
+test("preserves one-model behavior when billing or default context_max is unusable", () => {
+  for (const billing of [
+    undefined,
+    null,
+    {},
+    { token_prices: "changed" },
+    { token_prices: { default: {} } },
+    { token_prices: { default: { context_max: -1 } } },
+    { token_prices: { default: { context_max: 3.5 } } },
+  ]) {
+    const [parsed] = parseCopilotCatalog(
+      { data: [model("gpt-5.6-sol", { billing })] },
+      [baseModel] as Model<Api>[],
+      "https://example.test",
+    );
+    assert.equal(parsed?.id, "gpt-5.6-sol");
+    assert.equal(parsed?.contextWindow, 1_050_000);
+    assert.equal(parsed?.name, "gpt-5.6-sol");
+  }
+});
+
+test("skips only malformed additional tiers", () => {
+  for (const long_context of [{}, { context_max: "922000" }, { context_max: Number.NaN }]) {
+    const catalog = buildCopilotCatalog(
+      { data: [model("gpt-5.6-sol", { billing: tieredBilling({ long_context }) })] },
+      [baseModel] as Model<Api>[],
+      "https://example.test",
+    );
+    assert.deepEqual(catalog.models.map((entry) => entry.id), ["gpt-5.6-sol"]);
+    assert.equal(catalog.models[0]?.contextWindow, 400_000);
+  }
+});
+
+test("caps effective context and skips a non-default tier with the same result", () => {
+  const capped = model("gpt-5.6-sol", {
+    billing: tieredBilling({
+      default: { context_max: 400_000, input_price: 200, output_price: 1_000, cache_price: 20, cache_write_price: 250 },
+      long_context: { context_max: 500_000, input_price: 400, output_price: 1_500, cache_price: 40, cache_write_price: 500 },
+    }),
+    capabilities: {
+      limits: { max_context_window_tokens: 500_000, max_output_tokens: 128_000 },
+      supports: { tool_calls: true },
+    },
+  });
+  const catalog = buildCopilotCatalog({ data: [capped] }, [baseModel] as Model<Api>[], "https://example.test");
+  assert.deepEqual(catalog.models.map((entry) => [entry.id, entry.contextWindow]), [["gpt-5.6-sol", 500_000]]);
+});
+
+test("uses footer-compatible context suffix formatting", () => {
+  assert.equal(formatTokens(400_000), "400k");
+  assert.equal(formatTokens(500_000), "500k");
+  assert.equal(formatTokens(1_000_000), "1.0M");
+  assert.equal(formatTokens(1_050_000), "1.1M");
+  assert.equal(formatTokens(9_500), "9.5k");
+  assert.equal(formatTokens(999), "999");
+});
+
+test("supports prototype-named model IDs without route collisions", () => {
+  const ids = ["__proto__", "constructor", "toString"];
+  const catalog = buildCopilotCatalog(
+    { data: ids.map((id) => model(id, { capabilities: { supports: { tool_calls: true } } })) },
+    [],
+    "https://example.test",
+  );
+  assert.deepEqual(catalog.models.map(({ id }) => id), ids);
+  assert.deepEqual([...catalog.routes.keys()], ids);
+  for (const id of ids) {
+    assert.deepEqual(catalog.routes.get(id), { canonicalModelId: id, contextTier: "default" });
+  }
+});
+
+test("canonical IDs win generated-alias collisions", () => {
+  const catalog = buildCopilotCatalog(
+    {
+      data: [
+        model("gpt-5.6-sol", { billing: tieredBilling() }),
+        model("gpt-5.6-sol-1.1M", { capabilities: { supports: { tool_calls: true } } }),
+      ],
+    },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.deepEqual(catalog.models.map((entry) => entry.id), [
+    "gpt-5.6-sol",
+    "gpt-5.6-sol@1.1M",
+    "gpt-5.6-sol-1.1M",
+  ]);
+  assert.deepEqual(catalog.routes.get("gpt-5.6-sol@1.1M"), {
+    canonicalModelId: "gpt-5.6-sol",
+    contextTier: "long_context",
+  });
+  assert.deepEqual(catalog.routes.get("gpt-5.6-sol-1.1M"), {
+    canonicalModelId: "gpt-5.6-sol-1.1M",
+    contextTier: "default",
+  });
+});
+
+test("converts cents per arbitrary batch size into dollars per million", () => {
+  const halfBatchModel: Model<"openai-responses"> = {
+    ...baseModel,
+    cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+  };
+  const billing = tieredBilling({ batch_size: 500_000 });
+  const catalog = buildCopilotCatalog(
+    { data: [model("gpt-5.6-sol", { billing })] },
+    [halfBatchModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.deepEqual(catalog.models[0]?.cost, { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 });
+  assert.deepEqual(catalog.models[1]?.cost, {
+    input: 8,
+    output: 30,
+    cacheRead: 0.8,
+    cacheWrite: 10,
+  });
+});
+
+test("rejects malformed pricing and coherently falls back to inherited rates", () => {
+  for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, "200", undefined]) {
+    const defaultPrice = {
+      context_max: 272_000,
+      input_price: bad,
+      output_price: 1_000,
+      cache_price: 20,
+      cache_write_price: 250,
+    };
+    const catalog = buildCopilotCatalog(
+      { data: [model("gpt-5.6-sol", { billing: tieredBilling({ default: defaultPrice }) })] },
+      [baseModel] as Model<Api>[],
+      "https://example.test",
+    );
+    assert.deepEqual(catalog.models[0]?.cost, baseModel.cost);
+    assert.deepEqual(catalog.models[1]?.cost, baseModel.cost);
+  }
+});
+
+test("a malformed long price keeps both variant schedules on coherent inherited rates", () => {
+  const long_context = {
+    context_max: 922_000,
+    input_price: 400,
+    output_price: Number.POSITIVE_INFINITY,
+    cache_price: 40,
+    cache_write_price: 500,
+  };
+  const catalog = buildCopilotCatalog(
+    { data: [model("gpt-5.6-sol", { billing: tieredBilling({ long_context }) })] },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.equal(catalog.models.length, 2);
+  assert.deepEqual(catalog.models[0]?.cost, baseModel.cost);
+  assert.deepEqual(catalog.models[1]?.cost, baseModel.cost);
+});
+
+test("malformed batch_size keeps complete inherited schedules without hiding variants", () => {
+  for (const batch_size of [0, -1, 1.5, "1000000", Number.POSITIVE_INFINITY]) {
+    const catalog = buildCopilotCatalog(
+      { data: [model("gpt-5.6-sol", { billing: tieredBilling({ batch_size }) })] },
+      [baseModel] as Model<Api>[],
+      "https://example.test",
+    );
+    assert.equal(catalog.models.length, 2);
+    assert.deepEqual(catalog.models[0]?.cost, baseModel.cost);
+    assert.deepEqual(catalog.models[1]?.cost, baseModel.cost);
+  }
+});
+
+test("each variant has one complete flat schedule without inferred thresholds", () => {
+  const catalog = buildCopilotCatalog(
+    { data: [model("gpt-5.6-sol", { billing: tieredBilling() })] },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.deepEqual(catalog.models[0]?.cost, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+  assert.deepEqual(catalog.models[1]?.cost, { input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 });
+  assert.equal(catalog.models.every((entry) => entry.cost.tiers === undefined), true);
+});
+
+test("equal tier prices still produce separate complete schedules", () => {
+  const equalLong = {
+    context_max: 922_000,
+    input_price: 200,
+    output_price: 1_000,
+    cache_price: 20,
+    cache_write_price: 250,
+  };
+  const catalog = buildCopilotCatalog(
+    { data: [model("gpt-5.6-sol", { billing: tieredBilling({ long_context: equalLong }) })] },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.deepEqual(catalog.models[1]?.cost, catalog.models[0]?.cost);
+  assert.notStrictEqual(catalog.models[0]?.cost, catalog.models[1]?.cost);
+  assert.equal(catalog.models[0]?.cost.tiers, undefined);
+  assert.equal(catalog.models[1]?.cost.tiers, undefined);
+});
+
+test("rejects unrepresentable one-hour cache-write prices and non-finite conversions", () => {
+  const representable = tieredBilling({
+    default: {
+      context_max: 272_000,
+      input_price: 200,
+      output_price: 1_000,
+      cache_price: 20,
+      cache_write_price: 250,
+      cache_write_1h_price: 400,
+    },
+    long_context: {
+      context_max: 922_000,
+      input_price: 400,
+      output_price: 1_500,
+      cache_price: 40,
+      cache_write_price: 500,
+      cache_write_1h_price: 800,
+    },
+  });
+  const accepted = buildCopilotCatalog(
+    { data: [model("gpt-5.6-sol", { billing: representable })] },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.deepEqual(accepted.models[0]?.cost, baseModel.cost);
+  assert.deepEqual(accepted.models[1]?.cost, baseModel.cost);
+
+  for (const cache_write_1h_price of [401, -1, Number.NaN, Number.POSITIVE_INFINITY, "400"]) {
+    const defaultPrice = {
+      context_max: 272_000,
+      input_price: 200,
+      output_price: 1_000,
+      cache_price: 20,
+      cache_write_price: 250,
+      cache_write_1h_price,
+    };
+    const rejected = buildCopilotCatalog(
+      { data: [model("gpt-5.6-sol", { billing: tieredBilling({ default: defaultPrice }) })] },
+      [baseModel] as Model<Api>[],
+      "https://example.test",
+    );
+    assert.deepEqual(rejected.models[0]?.cost, baseModel.cost);
+    assert.deepEqual(rejected.models[1]?.cost, baseModel.cost);
+  }
+
+  const overflow = buildCopilotCatalog(
+    {
+      data: [
+        model("gpt-5.6-sol", {
+          billing: tieredBilling({
+            batch_size: 1,
+            default: {
+              context_max: 272_000,
+              input_price: Number.MAX_VALUE,
+              output_price: Number.MAX_VALUE,
+              cache_price: Number.MAX_VALUE,
+              cache_write_price: Number.MAX_VALUE,
+            },
+          }),
+        }),
+      ],
+    },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  assert.deepEqual(overflow.models[0]?.cost, baseModel.cost);
+  assert.deepEqual(overflow.models[1]?.cost, baseModel.cost);
+});
+
+test("does not trust endpoint price units without a matching built-in anchor", () => {
+  const catalog = buildCopilotCatalog(
+    { data: [model("entirely-new-family", { billing: tieredBilling() })] },
+    [],
+    "https://example.test",
+  );
+  assert.equal(catalog.models.length, 2);
+  assert.deepEqual(catalog.models[0]?.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.deepEqual(catalog.models[1]?.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.equal(catalog.models[0]?.api, "openai-completions");
+});
+
+test("validated units apply to unknown models while preserving conservative transport metadata", () => {
+  const catalog = buildCopilotCatalog(
+    {
+      data: [
+        model("gpt-5.6-sol", { billing: tieredBilling() }),
+        model("entirely-new-family", { billing: tieredBilling() }),
+      ],
+    },
+    [baseModel] as Model<Api>[],
+    "https://example.test",
+  );
+  const unknown = catalog.models.find((entry) => entry.id === "entirely-new-family");
+  const unknownLong = catalog.models.find((entry) => entry.id === "entirely-new-family-1.1M");
+  assert.equal(unknown?.api, "openai-completions");
+  assert.deepEqual(unknown?.compat, {
+    supportsStore: false,
+    supportsDeveloperRole: false,
+    supportsReasoningEffort: false,
+  });
+  assert.deepEqual(unknown?.cost, baseModel.cost);
+  assert.deepEqual(unknownLong?.cost, { input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 });
 });

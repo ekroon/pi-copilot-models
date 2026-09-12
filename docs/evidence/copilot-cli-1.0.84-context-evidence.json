@@ -1,0 +1,54 @@
+{
+  "copilotCliVersion": "1.0.84-4",
+  "sources": {
+    "apiSchema": {
+      "relativePath": "schemas/api.schema.json",
+      "sha256": "89399035ad73c37ff184513ba04b89c205fdb2bd733af28332ff033a72bc877e"
+    },
+    "generatedRpcTypes": {
+      "relativePath": "copilot-sdk/generated/rpc.d.ts",
+      "sha256": "bd8b179d4ccfd8b7be098f4596dcd6c9522a7ca02beab41ef142b92a544fe9a5"
+    },
+    "runtimeBundle": {
+      "relativePath": "app.js",
+      "sha256": "916fa57db9b90245745f1d3b7d8b66f4cccf2bbfcb7b1e21fd2b1a056d99d147"
+    }
+  },
+  "schemaExcerpts": {
+    "ContextTier": {
+      "type": "string",
+      "enum": ["default", "long_context"],
+      "description": "Context tier for models that support multiple context-window sizes."
+    },
+    "OptionsUpdateContextTier": {
+      "type": "string",
+      "enum": ["default", "long_context"],
+      "description": "Context tier for models with tiered pricing. The session uses this to derive effective `modelCapabilitiesOverrides` so compaction, truncation, token display, and request limits honor the selected tier."
+    },
+    "ModelBillingTokenPrices": {
+      "batchSize": { "type": "integer", "exclusiveMinimum": 0 },
+      "maxPromptTokens": {
+        "type": "integer",
+        "description": "Prompt token budget for the default tier. The total context window is this value plus the model's max_output_tokens."
+      }
+    },
+    "ModelBillingTokenPricesLongContext": {
+      "maxPromptTokens": {
+        "type": "integer",
+        "description": "Prompt token budget for the long context tier. The total context window is this value plus the model's max_output_tokens."
+      }
+    }
+  },
+  "runtimeExcerpts": {
+    "subagentContextTierOptions": "[\"contextTier\",{kind:\"enum\",options:[\"inherit\",\"default\",\"long_context\"]}]",
+    "cliContextOption": "new Oo(\"--context <tier>\",\"Set the context window tier (overrides persisted setting)\").choices([\"default\",\"long_context\"])"
+  },
+  "requestEvidence": {
+    "checkedInPairedStructuralCaptures": false,
+    "reason": "No sanitized raw paired request captures were available locally for this pass; no transport-parity or wire-absence claim is made from a summary fixture."
+  },
+  "usageAndPricingEvidence": {
+    "checkedInSanitizedObservations": false,
+    "reason": "No independently reproducible sanitized usage or invoice artifact was available locally; variant costs therefore use one complete advertised schedule and do not infer threshold behavior."
+  }
+}
