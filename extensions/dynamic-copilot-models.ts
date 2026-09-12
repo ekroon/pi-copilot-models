@@ -23,6 +23,7 @@ import {
   normalizeCopilotAssistantMessage,
   transformCopilotRequest,
 } from "../src/request-routing.js";
+import { withCopilotUsage } from "../src/copilot-usage.js";
 
 const PROVIDER_ID = "github-copilot";
 const DEFAULT_BASE_URL = "https://api.individual.githubcopilot.com";
@@ -146,6 +147,7 @@ function registerDynamicCopilotModels(
   builtIn: Provider<CopilotApi>,
 ): void {
   const baseline = [...builtIn.getModels()] as Model<CopilotApi>[];
+  const meteredBuiltIn = withCopilotUsage(builtIn);
   const agentDir = options.agentDir ?? getAgentDir();
   const cachePath = getCatalogCachePath(agentDir);
   const initialCredential = startupCredential(options, agentDir);
@@ -180,7 +182,7 @@ function registerDynamicCopilotModels(
   };
 
   const provider: Provider<CopilotApi> = {
-    ...builtIn,
+    ...meteredBuiltIn,
     getModels: () => models,
     // A fetched picker/policy response is already account-filtered. Before
     // the first fetch, retain the built-in credential filter rather than

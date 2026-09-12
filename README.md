@@ -25,6 +25,9 @@ pi's bundled catalog. For example, the endpoint can return
   variant was removed instead of retaining stale limits, prices, or routing.
 - Reports cache-write failures once as non-fatal warnings; the live catalog
   remains usable.
+- Uses Copilot's settled per-request `copilot_usage` amount for Pi's displayed
+  cost when the response provides it, while retaining catalog-rate calculation
+  as a fallback.
 - Supports Individual, Business, Enterprise, proxy-derived, and GHES-derived
   endpoints without inheriting a built-in template's account URL.
 
@@ -101,6 +104,27 @@ routing, endpoint, and pricing semantics cannot be reconstructed safely.
 Finalized Anthropic messages are normalized back to the selected synthetic ID (while retaining the reported
 canonical ID as `responseModel`), which preserves the variant and signed
 thinking replay across session restore.
+
+## Settled AI-credit costs
+
+Copilot responses may include a `copilot_usage` object with `total_nano_aiu`
+and per-category `token_details`. The extension observes this metadata for all
+three Copilot transports (Responses, Chat Completions, and Anthropic Messages)
+without changing the response bytes delivered to Pi's built-in adapters.
+
+One AI credit is USD $0.01, so the authoritative request total is converted as:
+
+```text
+USD = total_nano_aiu / 1,000,000,000 / 100
+```
+
+Known `input`, `output`, `cache_read`, and `cache_write` details populate Pi's
+cost breakdown. Unknown future categories remain represented in the
+server-provided total. Missing or malformed metadata leaves Pi's existing
+catalog-derived costs unchanged. The corrected final message follows Pi's
+normal persistence, compaction, `/session`, and footer aggregation paths.
+Sanitized captures for each transport and a Copilot CLI conversion check are
+recorded in [the usage evidence](docs/evidence/copilot-usage-contract.json).
 
 The extension does **not** read credentials from GitHub Copilot CLI files and
 does not invoke `copilot`. Authentication remains owned by pi.

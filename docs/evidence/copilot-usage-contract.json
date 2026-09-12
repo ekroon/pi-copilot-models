@@ -1,0 +1,68 @@
+{
+  "capturedAt": "2026-09-12T07:01:26Z",
+  "clients": {
+    "pi": "0.84.4",
+    "copilotCli": "1.0.84-5"
+  },
+  "sanitization": "Only API kind, model ID, stop reason, and copilot_usage were retained. Prompts, response content, credentials, headers, request IDs, account data, and endpoint data were discarded.",
+  "conversion": {
+    "nanoAiuPerAiCredit": 1000000000,
+    "usdPerAiCredit": 0.01,
+    "nanoAiuPerUsd": 100000000000
+  },
+  "captures": [
+    {
+      "api": "anthropic-messages",
+      "model": "claude-haiku-4.5",
+      "stopReason": "stop",
+      "copilot_usage": {
+        "token_details": [
+          { "batch_size": 1000000, "cost_per_batch": 100000000000, "model": "claude-haiku-4.5", "token_count": 12, "token_type": "input" },
+          { "batch_size": 1000000, "cost_per_batch": 10000000000, "model": "claude-haiku-4.5", "token_count": 0, "token_type": "cache_read" },
+          { "batch_size": 1000000, "cost_per_batch": 125000000000, "model": "claude-haiku-4.5", "token_count": 0, "token_type": "cache_write" },
+          { "batch_size": 1000000, "cost_per_batch": 500000000000, "model": "claude-haiku-4.5", "token_count": 4, "token_type": "output" }
+        ],
+        "total_nano_aiu": 3200000
+      },
+      "derived": { "aiCredits": 0.0032, "usd": 0.000032 }
+    },
+    {
+      "api": "openai-completions",
+      "model": "gemini-3.5-flash",
+      "stopReason": "length",
+      "copilot_usage": {
+        "token_details": [
+          { "batch_size": 1000000, "cost_per_batch": 150000000000, "model": "gemini-3.5-flash", "token_count": 5, "token_type": "input" },
+          { "batch_size": 1000000, "cost_per_batch": 15000000000, "model": "gemini-3.5-flash", "token_count": 0, "token_type": "cache_read" },
+          { "batch_size": 1000000, "cost_per_batch": 0, "model": "gemini-3.5-flash", "token_count": 0, "token_type": "cache_write" },
+          { "batch_size": 1000000, "cost_per_batch": 900000000000, "model": "gemini-3.5-flash", "token_count": 1, "token_type": "output" }
+        ],
+        "total_nano_aiu": 1650000
+      },
+      "derived": { "aiCredits": 0.00165, "usd": 0.0000165 }
+    },
+    {
+      "api": "openai-responses",
+      "model": "gpt-5-mini",
+      "stopReason": "length",
+      "copilot_usage": {
+        "token_details": [
+          { "batch_size": 1000000, "cost_per_batch": 25000000000, "model": "gpt-5-mini", "token_count": 11, "token_type": "input" },
+          { "batch_size": 1000000, "cost_per_batch": 2500000000, "model": "gpt-5-mini", "token_count": 0, "token_type": "cache_read" },
+          { "batch_size": 1000000, "cost_per_batch": 0, "model": "gpt-5-mini", "token_count": 0, "token_type": "cache_write" },
+          { "batch_size": 1000000, "cost_per_batch": 200000000000, "model": "gpt-5-mini", "token_count": 0, "token_type": "output" }
+        ],
+        "total_nano_aiu": 275000
+      },
+      "derived": { "aiCredits": 0.000275, "usd": 0.00000275 }
+    }
+  ],
+  "cliComparison": {
+    "commandShape": "copilot -p <sanitized prompt> --model gpt-5-mini --usage-output-file <temporary file> --no-custom-instructions --no-ask-user",
+    "displayedAiCredits": 0.59,
+    "totalNanoAiu": 594575000,
+    "derivedAiCredits": 0.594575,
+    "derivedUsd": 0.00594575,
+    "note": "The CLI display rounds AI credits to two decimals. Its usage output retained the exact totalNanoAiu. The CLI and direct Pi requests have different system prompts, so this validates units and conversion rather than identical token totals."
+  }
+}
