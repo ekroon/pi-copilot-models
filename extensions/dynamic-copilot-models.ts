@@ -48,7 +48,7 @@ export type CopilotSelectionReconciliation =
  * object so pi does not retain old limits, cost, compatibility, or routing.
  */
 export async function reconcileCopilotSelection(
-  pi: Pick<ExtensionAPI, "setModel">,
+  pi: Pick<ExtensionAPI, "setModel" | "getThinkingLevel" | "setThinkingLevel">,
   ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
   selectedBeforeRefresh: Model<CopilotApi> | undefined,
   previousRoute?: { canonicalModelId: string },
@@ -74,7 +74,14 @@ export async function reconcileCopilotSelection(
     | Model<CopilotApi>
     | undefined;
   const target = exact ?? canonicalFallback ?? providerFallback ?? catalogFallback;
-  if (!target || !(await pi.setModel(target))) return { status: "unavailable" };
+  if (!target) return { status: "unavailable" };
+  // Rebinding the same ID only updates metadata, but setModel applies Pi's
+  // model-switch thinking defaults. Preserve the active level (including CLI
+  // overrides) and let Pi clamp it to the refreshed model's capabilities.
+  // A fallback is a real model switch and should keep its normal defaults.
+  const thinkingLevel = exact ? pi.getThinkingLevel() : undefined;
+  if (!(await pi.setModel(target))) return { status: "unavailable" };
+  if (thinkingLevel !== undefined) pi.setThinkingLevel(thinkingLevel);
   return { status: exact ? "replaced" : "fallback", model: target };
 }
 

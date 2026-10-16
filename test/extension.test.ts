@@ -60,22 +60,28 @@ test("reconciles replaced objects and removed variants through pi.setModel", asy
       getAll: () => published,
     },
   };
+  let thinking: ReturnType<ExtensionAPI["getThinkingLevel"]> = "high";
+  const restoredThinking: string[] = [];
   const pi = {
+    getThinkingLevel: () => thinking,
+    setThinkingLevel(level: typeof thinking) { thinking = level; restoredThinking.push(level); },
     setModel: async (model: Model<Api>) => {
       selections.push(model);
       active = model;
+      thinking = "low"; // Pi applies model-switch defaults, even for the same ID.
       return true;
     },
   };
 
-  const replaced = await reconcileCopilotSelection(pi as Pick<ExtensionAPI, "setModel">, ctx as never, old);
+  const replaced = await reconcileCopilotSelection(pi, ctx as never, old);
   assert.deepEqual(replaced, { status: "replaced", model: replacement });
   assert.strictEqual(active, replacement);
+  assert.equal(thinking, "high");
 
   active = removedVariant;
   published = [canonical];
   const fallback = await reconcileCopilotSelection(
-    pi as Pick<ExtensionAPI, "setModel">,
+    pi,
     ctx as never,
     removedVariant,
     { canonicalModelId: canonical.id },
@@ -83,6 +89,57 @@ test("reconciles replaced objects and removed variants through pi.setModel", asy
   assert.deepEqual(fallback, { status: "fallback", model: canonical });
   assert.strictEqual(active, canonical);
   assert.deepEqual(selections, [replacement, canonical]);
+  assert.equal(thinking, "low", "a real fallback retains Pi's model-switch defaults");
+  assert.deepEqual(restoredThinking, ["high"]);
+});
+
+for (const level of ["off", "minimal", "low", "medium", "high", "xhigh"] as const) {
+  test(`same-model reconciliation preserves ${level} thinking without persisting defaults`, async () => {
+    const old = fakeModel("gpt-test-1.0M", 1_000_000);
+    const replacement = { ...old };
+    let thinking: ReturnType<ExtensionAPI["getThinkingLevel"]> = level;
+    const pi = {
+      getThinkingLevel: () => thinking,
+      setThinkingLevel(value: typeof thinking) { thinking = value; },
+      async setModel() { thinking = "medium"; return true; },
+    };
+    const ctx = {
+      model: old,
+      modelRegistry: {
+        find: () => replacement,
+        getAvailable: () => [replacement],
+        getAll: () => [replacement],
+      },
+    };
+    assert.equal((await reconcileCopilotSelection(pi, ctx as never, old)).status, "replaced");
+    assert.equal(thinking, level);
+  });
+}
+
+test("reconciliation does not change thinking for a current, changed, or failed selection", async () => {
+  const old = fakeModel("gpt-test", 128_000);
+  const replacement = { ...old };
+  let active = old;
+  let published = old;
+  const pi = {
+    getThinkingLevel: () => "high" as const,
+    setThinkingLevel() { assert.fail("must not restore thinking without a successful rebind"); },
+    async setModel() { return false; },
+  };
+  const ctx = {
+    get model() { return active; },
+    modelRegistry: {
+      find: () => published,
+      getAvailable: () => [published],
+      getAll: () => [published],
+    },
+  };
+  assert.equal((await reconcileCopilotSelection(pi, ctx as never, old)).status, "current");
+  active = fakeModel("other-model", 128_000);
+  assert.equal((await reconcileCopilotSelection(pi, ctx as never, old)).status, "selection-changed");
+  active = old;
+  published = replacement;
+  assert.equal((await reconcileCopilotSelection(pi, ctx as never, old)).status, "unavailable");
 });
 
 test("session_start and manual refresh replace stale active model objects after a cache-version miss", async () => {
@@ -100,6 +157,7 @@ test("session_start and manual refresh replace stale active model objects after 
   let provider: Provider<any> | undefined;
   let active: Model<Api> | undefined;
   const selections: Model<Api>[] = [];
+  let thinking: ReturnType<ExtensionAPI["getThinkingLevel"]> = "high";
   const notices: Array<{ message: string; level: string }> = [];
   let payload: { data: unknown[] } = { data: [] };
   const originalFetch = globalThis.fetch;
@@ -116,9 +174,12 @@ test("session_start and manual refresh replace stale active model objects after 
     registerCommand(name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) {
       commands.set(name, command);
     },
+    getThinkingLevel: () => thinking,
+    setThinkingLevel(level: typeof thinking) { thinking = level; },
     async setModel(model: Model<Api>) {
       selections.push(model);
       active = model;
+      thinking = "low";
       return true;
     },
   };
@@ -165,6 +226,8 @@ test("session_start and manual refresh replace stale active model objects after 
     assert.notStrictEqual(afterStartup, initial);
     assert.strictEqual(afterStartup, modelRegistry.find(afterStartup.provider, afterStartup.id));
     assert.equal(afterStartup.contextWindow, initial.contextWindow + 10_000);
+    assert.equal(thinking, "high", "startup preserves the CLI thinking override");
+    thinking = "off";
 
     payload = { data: [catalogItem(afterStartup.id, afterStartup.contextWindow + 20_000, afterStartup.maxTokens)] };
     const refresh = commands.get("copilot-models-refresh");
@@ -175,6 +238,7 @@ test("session_start and manual refresh replace stale active model objects after 
     assert.strictEqual(active, modelRegistry.find(active.provider, active.id));
     assert.equal(active.contextWindow, afterStartup.contextWindow + 20_000);
     assert.equal(selections.length, 2);
+    assert.equal(thinking, "off", "manual refresh preserves the current thinking level");
     assert.equal(notices.some(({ message }) => /no longer available/.test(message)), false);
   } finally {
     globalThis.fetch = originalFetch;
