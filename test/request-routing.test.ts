@@ -164,12 +164,13 @@ test("normalizes finalized Anthropic messages for session restore and signed thi
 
   // Restoring the synthetic model and normalized session message makes pi-ai's
   // supported same-model replay path retain the opaque signature. Without the
-  // normalization, transformMessages downgrades the thought to plain text.
+  // normalization, pi-ai strips the signature (older hosts downgrade to text;
+  // newer hosts omit the cross-model thinking block entirely).
   const restoredSelection = { ...selected };
   assert.deepEqual(transformMessages([normalized], restoredSelection)[0]?.content, finalized.content);
-  assert.deepEqual(transformMessages([finalized], restoredSelection)[0]?.content, [
-    { type: "text", text: "signed thought" },
-  ]);
+  const mismatched = transformMessages([finalized], restoredSelection)[0]?.content ?? [];
+  assert.ok(Array.isArray(mismatched));
+  assert.equal(mismatched.some((block) => block.type === "thinking"), false);
 });
 
 test("checked-in evidence contains structural source excerpts and disclaims absent captures", () => {

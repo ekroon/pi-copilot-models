@@ -135,6 +135,14 @@ command-backed `apiKey` in `models.json` is resolved asynchronously by pi and
 therefore cannot seed this extension's startup cache; the live catalog still
 loads during the normal refresh.
 
+## Requirements
+
+- Node.js **22.19.0+** (a supported LTS release is recommended).
+- Pi **0.84.4+**; the development toolchain uses Pi **1.3.0**. Prefer a current
+  Pi release for upstream fixes. CI covers the minimum and development hosts.
+- A GitHub Copilot account with access to the selected models. Authentication
+  and any model policy/entitlement requirements remain owned by Pi and GitHub.
+
 ## Install
 
 Install directly from GitHub—publishing to npm is not required:
@@ -184,6 +192,27 @@ Opening `/model` refreshes dynamic catalogs. You can force a refresh with:
 ```text
 /copilot-models-refresh
 ```
+
+### Command-line model and thinking level
+
+Use Pi's standard thinking flag or model suffix, including with cached dynamic
+models and context-tier variants:
+
+```bash
+pi --model github-copilot/gpt-5.6-sol --thinking high
+pi --model github-copilot/gpt-5.6-sol-1.1M:high
+```
+
+Use an exact ID present in `/model`. A newly discovered dynamic ID needs a
+matching startup cache: run `/copilot-models-refresh` in a session once before
+selecting that ID from a new command-line invocation. Without a cache, startup
+selection can only resolve Pi's bundled IDs.
+
+An explicit `--thinking` takes precedence over the suffix. Startup discovery
+and `/copilot-models-refresh` preserve the active thinking level when updating
+the same model's metadata, subject to Pi's capability clamping. If a model is
+removed and the extension selects a fallback, Pi's normal model-switch thinking
+defaults apply.
 
 For non-interactive verification:
 
@@ -241,7 +270,14 @@ resolved value passed to pi.
 ## Development
 
 ```bash
-npm install
-npm test
-npm run typecheck
+npm ci
+npm run check
+npm run check:package
 ```
+
+The package smoke test loads an extracted tarball without local peer packages.
+The CLI regression test uses synthetic credentials and blocks real network
+access. Neither test needs a Copilot account.
+
+See [the changelog](CHANGELOG.md), [release checklist](docs/releasing.md), and
+[security guidance](SECURITY.md). No publication is performed by these checks.

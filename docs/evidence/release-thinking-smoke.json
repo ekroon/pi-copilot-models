@@ -1,0 +1,51 @@
+{
+  "capturedAt": "2026-10-16T08:32:44Z",
+  "piVersion": "1.2.0",
+  "provider": "github-copilot",
+  "model": "gpt-6.1-sol",
+  "candidate": "Local working tree based on b12a9a0, including the uncommitted thinking-preservation and release-hardening changes",
+  "isolation": "Explicit extension paths, automatic extensions/skills/templates/tools disabled, empty temporary working directory, no session persistence. Existing Pi-managed OAuth authentication was used without copying credentials.",
+  "sanitization": "Only model/version, CLI selection arguments, startup thinking level, selected request effort fields, stop reason, token counts, and final displayed cost are retained. No credentials, headers, request identifiers, raw payloads, or account-specific endpoint data are included.",
+  "candidateRuns": [
+    {
+      "selectionArgs": ["--model", "github-copilot/gpt-6.1-sol", "--thinking", "high"],
+      "startupThinking": "high",
+      "requestReasoningEffort": "high",
+      "stopReason": "stop",
+      "responseText": "OK",
+      "inputTokens": 585,
+      "outputTokens": 5,
+      "displayedCostUsd": 0.00122
+    },
+    {
+      "selectionArgs": ["--model", "github-copilot/gpt-6.1-sol:high"],
+      "startupThinking": "high",
+      "requestReasoningEffort": "high",
+      "stopReason": "stop",
+      "responseText": "OK",
+      "inputTokens": 584,
+      "outputTokens": 5,
+      "displayedCostUsd": 0.001218
+    },
+    {
+      "selectionArgs": ["--model", "github-copilot/gpt-6.1-sol:high", "--thinking", "off"],
+      "startupThinking": "off",
+      "requestReasoningEffort": null,
+      "requestReasoningEffortNote": "Neither reasoning.effort nor reasoning_effort was present in the observed serialized request.",
+      "stopReason": "stop",
+      "responseText": "OK",
+      "inputTokens": 584,
+      "outputTokens": 5,
+      "displayedCostUsd": 0.001218
+    }
+  ],
+  "installedCopyControl": {
+    "revision": "ff1d009",
+    "selectionArgs": ["--model", "github-copilot/gpt-6.1-sol", "--thinking", "high"],
+    "startupThinking": "low",
+    "inferenceRequestSent": false,
+    "method": "A probe command reported thinking after live catalog refresh, without sending a prompt.",
+    "additionalObservation": "The installed copy also emitted an ENOENT warning while renaming its shared process-local cache temporary file. The candidate uses unique per-write temporary filenames."
+  },
+  "conclusion": "The installed Git package lacks the local thinking-preservation fix and reproduces the reported reset. The local candidate preserves CLI thinking through live discovery and provider dispatch. These checks cover one account/model and do not certify all transports, context tiers, or session restore."
+}
