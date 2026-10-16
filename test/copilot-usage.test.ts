@@ -14,11 +14,16 @@ import {
 import {
   CopilotUsageParser,
   MAX_JSON_FALLBACK_BYTES,
+  MAX_USAGE_RECORD_CHARS,
   NANO_AIU_PER_USD,
   parseCopilotUsage,
   tokenDetailCosts,
   withCopilotUsage,
 } from "../src/copilot-usage.js";
+
+// The fake provider never inspects the transcript. Newer Pi versions brand
+// Context; keep this opaque fixture compatible with the minimum supported host.
+const emptyContext = { messages: [] } as unknown as Parameters<Provider<Api>["stream"]>[1];
 
 const fallbackCost = { input: 0.1, output: 0.2, cacheRead: 0.03, cacheWrite: 0.04, total: 0.37 };
 const usageWire = {
@@ -132,7 +137,7 @@ for (const method of ["stream", "streamSimple"] as const) {
       let forwarded = "";
       const provider = withCopilotUsage(providerThatConsumesResponse((value) => { forwarded = value; }));
       const selected = model(api);
-      const result = await provider[method](selected, { messages: [] }, {
+      const result = await provider[method](selected, emptyContext, {
         fetch: async () => fragmentedResponse(body),
       }).result();
 
@@ -151,7 +156,7 @@ for (const method of ["stream", "streamSimple"] as const) {
 test("observes a non-streaming JSON response", async () => {
   const body = JSON.stringify({ response: { copilot_usage: usageWire } }, null, 2);
   const provider = withCopilotUsage(providerThatConsumesResponse());
-  const result = await provider.stream(model("openai-responses"), { messages: [] }, {
+  const result = await provider.stream(model("openai-responses"), emptyContext, {
     fetch: async () => new Response(body, { headers: { "content-type": "application/json" } }),
   }).result();
   assert.equal(result.usage.cost.total, 0.5725);
@@ -174,6 +179,69 @@ test("caps whole-body JSON fallback while continuing incremental NDJSON parsing"
   incremental.push(encoder.encode(`${JSON.stringify({ copilot_usage: { total_nano_aiu: 2_000_000_000 } })}\n`));
   incremental.finish();
   assert.equal(captures.at(-1)?.totalNanoAiu, 2_000_000_000);
+});
+
+test("oversized lines and multi-line SSE events disable observation without retaining their buffers", () => {
+  const encoder = new TextEncoder();
+  for (const sse of [false, true]) {
+    const captures: unknown[] = [];
+    const parser = new CopilotUsageParser((usage) => captures.push(usage));
+    const fragment = (sse ? "data: " : "") + "x".repeat(64 * 1024);
+    for (let size = 0; size <= MAX_USAGE_RECORD_CHARS; size += fragment.length) {
+      parser.push(encoder.encode(fragment + (sse ? "\n" : "")));
+    }
+    parser.push(encoder.encode('\n\ndata: {"copilot_usage":{"total_nano_aiu":1}}\n\n'));
+    parser.finish();
+    assert.deepEqual(captures, []);
+    const state = parser as unknown as { buffer: string; completeBody: string; sseData: string[] };
+    assert.equal(state.buffer.length, 0);
+    assert.equal(state.completeBody.length, 0);
+    assert.equal(state.sseData.length, 0);
+  }
+});
+
+test("an unexpected provider iterator failure resolves as a normal error message", async () => {
+  const original = providerThatConsumesResponse();
+  original.stream = () => {
+    const source = createAssistantMessageEventStream();
+    source[Symbol.asyncIterator] = async function* () { throw new Error("broken provider stream"); };
+    return source;
+  };
+  const result = await withCopilotUsage(original).stream(model("openai-responses"), emptyContext).result();
+  assert.equal(result.stopReason, "error");
+  assert.equal(result.errorMessage, "broken provider stream");
+  assert.equal(result.provider, "github-copilot");
+});
+
+test("an aborted provider iterator preserves partial content and cancellation semantics", async () => {
+  const original = providerThatConsumesResponse();
+  const controller = new AbortController();
+  original.stream = () => {
+    const source = createAssistantMessageEventStream();
+    source[Symbol.asyncIterator] = async function* () {
+      yield { type: "start" as const, partial: message("openai-responses") };
+      controller.abort();
+      throw new Error("cancelled");
+    };
+    return source;
+  };
+  const result = await withCopilotUsage(original).stream(model("openai-responses"), emptyContext, {
+    signal: controller.signal,
+  }).result();
+  assert.equal(result.stopReason, "aborted");
+  assert.equal(result.errorMessage, "cancelled");
+  assert.deepEqual(result.content, message("openai-responses").content);
+});
+
+test("a provider can finish with end(message) without a terminal event", async () => {
+  const original = providerThatConsumesResponse();
+  original.stream = (selected) => {
+    const source = createAssistantMessageEventStream();
+    source.end(message(selected.api, selected.id));
+    return source;
+  };
+  const result = await withCopilotUsage(original).stream(model("openai-responses"), emptyContext).result();
+  assert.equal(result.stopReason, "stop");
 });
 
 test("accepts the Copilot CLI camel-cased usage shape", () => {
@@ -201,7 +269,7 @@ test("concurrent requests keep capture state isolated", async () => {
     const total_nano_aiu = id === "slow" ? 1_000_000_000 : 9_000_000_000;
     return fragmentedResponse(`data: ${JSON.stringify({ copilot_usage: { total_nano_aiu } })}\n\n`, 3);
   };
-  const request = (id: string) => provider.stream(selected, { messages: [] }, {
+  const request = (id: string) => provider.stream(selected, emptyContext, {
     fetch: () => fetch(`https://example.test/inference?id=${id}`),
   }).result();
 
@@ -225,7 +293,7 @@ test("a retry uses only the final response's Copilot usage", async () => {
     return events;
   };
   const provider = withCopilotUsage(retrying);
-  const result = await provider.stream(model("openai-completions"), { messages: [] }, {
+  const result = await provider.stream(model("openai-completions"), emptyContext, {
     fetch: async () => {
       attempt++;
       return fragmentedResponse(`data: ${JSON.stringify({
@@ -246,7 +314,7 @@ test("missing or malformed Copilot usage preserves catalog-derived costs", async
     "not-json-at-all",
   ]) {
     const provider = withCopilotUsage(providerThatConsumesResponse());
-    const result = await provider.stream(model("openai-completions"), { messages: [] }, {
+    const result = await provider.stream(model("openai-completions"), emptyContext, {
       fetch: async () => fragmentedResponse(body, 2),
     }).result();
     assert.deepEqual(result.usage.cost, fallbackCost);
@@ -288,7 +356,7 @@ test("sanitized live captures confirm nano-AIU totals and CLI conversion", async
 
 test("a corrected terminal message remains corrected through JSON session persistence and aggregation", async () => {
   const provider = withCopilotUsage(providerThatConsumesResponse());
-  const result = await provider.streamSimple(model("openai-responses"), { messages: [] }, {
+  const result = await provider.streamSimple(model("openai-responses"), emptyContext, {
     fetch: async () => fragmentedResponse(`data: ${JSON.stringify({ copilot_usage: usageWire })}\n\n`),
   }).result();
 

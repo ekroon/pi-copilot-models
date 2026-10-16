@@ -308,7 +308,12 @@ function endpointPriceUnitsValidated(
     const template = modelsById.get(item.id);
     if (!batchSize || !template) continue;
     const converted = parseTierPrice(prices?.default, batchSize);
-    if (converted && sameRates(converted, template.cost)) return true;
+    // Matching free-model zeros cannot establish a unit conversion.
+    if (
+      converted &&
+      (["input", "output", "cacheRead", "cacheWrite"] as const).some((key) => converted[key] > 0) &&
+      sameRates(converted, template.cost)
+    ) return true;
   }
   return false;
 }
@@ -474,7 +479,10 @@ export async function fetchCopilotCatalog(
     signal,
   });
   if (!response.ok) {
-    throw new Error(`GitHub Copilot model discovery failed: ${response.status} ${response.statusText}: ${await response.text()}`);
+    // Error bodies may contain account details or intermediary diagnostics.
+    // Do not read an unbounded body or echo server-controlled text into logs.
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`GitHub Copilot model discovery failed: HTTP ${response.status}`);
   }
   return (await response.json()) as CopilotCatalogResponse;
 }

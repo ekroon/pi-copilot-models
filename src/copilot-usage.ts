@@ -5,6 +5,7 @@ import {
   type AssistantMessageEvent,
   type AssistantMessageEventStream,
   type FetchFunction,
+  type Model,
   type Provider,
   type StreamOptions,
 } from "@earendil-works/pi-ai";
@@ -13,6 +14,8 @@ import {
 export const NANO_AIU_PER_USD = 100_000_000_000;
 /** Bound ordinary-JSON fallback retention; SSE and NDJSON are parsed incrementally. */
 export const MAX_JSON_FALLBACK_BYTES = 10 * 1024 * 1024;
+/** Bound retained UTF-16 characters in a single line or SSE event. */
+export const MAX_USAGE_RECORD_CHARS = 10 * 1024 * 1024;
 
 export interface CopilotTokenDetail {
   batchSize: number;
@@ -120,6 +123,8 @@ export class CopilotUsageParser {
   private fallbackTruncated = false;
   private sseData: string[] = [];
   private sawSse = false;
+  private sseChars = 0;
+  private disabled = false;
 
   constructor(
     onUsage: (usage: CopilotUsage) => void,
@@ -130,6 +135,7 @@ export class CopilotUsageParser {
   }
 
   push(chunk: Uint8Array): void {
+    if (this.disabled) return;
     const text = this.decoder.decode(chunk, { stream: true });
     if (!this.sawSse && !this.fallbackTruncated) {
       this.completeBodyBytes += chunk.byteLength;
@@ -144,6 +150,7 @@ export class CopilotUsageParser {
   }
 
   finish(): void {
+    if (this.disabled) return;
     const tail = this.decoder.decode();
     if (!this.sawSse && !this.fallbackTruncated) this.completeBody += tail;
     this.buffer += tail;
@@ -157,14 +164,24 @@ export class CopilotUsageParser {
     while (true) {
       const newline = this.buffer.indexOf("\n");
       if (newline < 0) break;
+      if (newline > MAX_USAGE_RECORD_CHARS) { this.disable(); return; }
       const line = this.buffer.slice(0, newline).replace(/\r$/, "");
       this.buffer = this.buffer.slice(newline + 1);
       this.processLine(line);
+      if (this.disabled) return;
     }
+    if (this.buffer.length > MAX_USAGE_RECORD_CHARS) { this.disable(); return; }
     if (flush && this.buffer.length > 0) {
       this.processLine(this.buffer.replace(/\r$/, ""));
       this.buffer = "";
     }
+  }
+
+  private disable(): void {
+    this.disabled = true;
+    this.buffer = "";
+    this.completeBody = "";
+    this.sseData = [];
   }
 
   private processLine(line: string): void {
@@ -176,6 +193,8 @@ export class CopilotUsageParser {
       this.sawSse = true;
       this.completeBody = "";
       this.completeBodyBytes = 0;
+      this.sseChars += line.length;
+      if (this.sseChars > MAX_USAGE_RECORD_CHARS) { this.disable(); return; }
       this.sseData.push(line.slice(5).replace(/^ /, ""));
       return;
     }
@@ -187,6 +206,7 @@ export class CopilotUsageParser {
     if (this.sseData.length === 0) return;
     this.inspectJson(this.sseData.join("\n").trim());
     this.sseData = [];
+    this.sseChars = 0;
   }
 
   private inspectJson(text: string): void {
@@ -323,14 +343,36 @@ function withTerminalMessage(event: AssistantMessageEvent, message: AssistantMes
 function observeStream(
   source: AssistantMessageEventStream,
   capture: RequestUsageCapture,
+  model: Model<Api>,
+  signal?: AbortSignal,
 ): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   void (async () => {
+    let partial: AssistantMessage | undefined;
     try {
       for await (const event of source) {
+        if ("partial" in event) partial = event.partial;
         const terminal = terminalMessage(event);
         output.push(terminal ? withTerminalMessage(event, capture.apply(terminal)) : event);
       }
+      // EventStream also permits a provider to finish with end(message).
+      output.end(capture.apply(await source.result()));
+    } catch (error) {
+      const reason = signal?.aborted || (error instanceof Error && error.name === "AbortError") ? "aborted" : "error";
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        timestamp: Date.now(),
+        ...partial,
+        stopReason: reason,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+      output.push({ type: "error", reason, error: capture.apply(message) });
     } finally {
       output.end();
     }
@@ -356,11 +398,11 @@ export function withCopilotUsage<TApi extends Api>(provider: Provider<TApi>): Pr
     ...provider,
     stream(model, context, options) {
       const capture = new RequestUsageCapture();
-      return observeStream(provider.stream(model, context, wrapOptions(options, capture)), capture);
+      return observeStream(provider.stream(model, context, wrapOptions(options, capture)), capture, model, options?.signal);
     },
     streamSimple(model, context, options) {
       const capture = new RequestUsageCapture();
-      return observeStream(provider.streamSimple(model, context, wrapOptions(options, capture)), capture);
+      return observeStream(provider.streamSimple(model, context, wrapOptions(options, capture)), capture, model, options?.signal);
     },
   };
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { buildCopilotCatalog, formatTokens, getCopilotBaseUrl, parseCopilotCatalog } from "../src/catalog.js";
+import { buildCopilotCatalog, fetchCopilotCatalog, formatTokens, getCopilotBaseUrl, parseCopilotCatalog } from "../src/catalog.js";
 
 const baseModel: Model<"openai-responses"> = {
   id: "gpt-5.6-sol",
@@ -59,6 +59,37 @@ function model(id: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test("discovery errors report status without reading or logging the server body", async () => {
+  const originalFetch = globalThis.fetch;
+  let cancelled = false;
+  const response = new Response(new ReadableStream({
+    cancel() { cancelled = true; },
+  }), { status: 401, statusText: "untrusted server diagnostic" });
+  response.text = async () => { assert.fail("must not read the error body"); };
+  globalThis.fetch = async () => response;
+  try {
+    await assert.rejects(
+      fetchCopilotCatalog({ key: "synthetic" }, baseModel.baseUrl, new AbortController().signal),
+      { message: "GitHub Copilot model discovery failed: HTTP 401" },
+    );
+    assert.equal(cancelled, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a free-model price match cannot validate units for paid models", () => {
+  const free = { ...baseModel, id: "free-model", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const catalog = buildCopilotCatalog({ data: [
+    model(free.id, { billing: tieredBilling({ default: {
+      context_max: 272_000, input_price: 0, output_price: 0, cache_price: 0, cache_write_price: 0,
+    } }) }),
+    model("unknown-paid-model", { billing: tieredBilling() }),
+  ] }, [free], baseModel.baseUrl);
+  assert.ok(catalog.models.length > 2);
+  assert.ok(catalog.models.every((entry) => Object.values(entry.cost).every((rate) => rate === 0)));
+});
 
 test("discovers a new fast variant by cloning its nearest built-in model", () => {
   const models = parseCopilotCatalog(

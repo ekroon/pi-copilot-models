@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -252,6 +252,33 @@ test("treats every legacy cache version as a normal miss", async () => {
         `cache v${version} must not be reconstructed`,
       );
     }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent cache writers each publish a complete catalog and leave no temporary files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dynamic-copilot-cache-"));
+  const path = join(directory, "catalog.json");
+  const account = getCredentialFingerprint({ type: "api_key", key: "concurrent" });
+  try {
+    await Promise.all(Array.from({ length: 20 }, () => saveCatalogCache(cachedCatalog, account, path)));
+    assert.deepEqual(loadCatalogCache(account, path), cachedCatalog);
+    assert.deepEqual(await readdir(directory), ["catalog.json"]);
+    if (process.platform !== "win32") assert.equal((await stat(path)).mode & 0o777, 0o600);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("failed cache publication cleans up its temporary file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dynamic-copilot-cache-"));
+  const path = join(directory, "catalog.json");
+  const account = getCredentialFingerprint({ type: "api_key", key: "failed" });
+  try {
+    await mkdir(path); // Renaming a file over a directory must fail.
+    await assert.rejects(saveCatalogCache(cachedCatalog, account, path));
+    assert.deepEqual(await readdir(directory), ["catalog.json"]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
