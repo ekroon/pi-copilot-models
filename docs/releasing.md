@@ -7,7 +7,8 @@ these checks.
 ## Requirements
 
 - Node.js 22.19.0 or newer (use a supported Node.js LTS release).
-- Pi 0.84.4 or newer. Development uses Pi 1.3.0; CI also tests the minimum host.
+- Pi 0.84.4 or newer. Development and CI use the locked Pi 1.3.0 toolchain;
+  CI runs on Node.js 22 and 24. Older hosts are not part of ongoing CI coverage.
   Prefer current Pi releases for upstream security fixes.
 - A clean checkout and the lockfile committed with the release.
 

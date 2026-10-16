@@ -139,7 +139,8 @@ loads during the normal refresh.
 
 - Node.js **22.19.0+** (a supported LTS release is recommended).
 - Pi **0.84.4+**; the development toolchain uses Pi **1.3.0**. Prefer a current
-  Pi release for upstream fixes. CI covers the minimum and development hosts.
+  Pi release for upstream fixes. CI tests Pi 1.3.0 on Node.js 22 and 24;
+  older hosts are not part of ongoing CI coverage.
 - A GitHub Copilot account with access to the selected models. Authentication
   and any model policy/entitlement requirements remain owned by Pi and GitHub.
 
